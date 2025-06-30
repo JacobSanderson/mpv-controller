@@ -12,7 +12,21 @@
       "id": "mpv-controler",
       "type": "keyword",
       "name": "mpv-controller",
-      "default_value": "mpv"
+      "default_value": "m"
+    },
+    {
+      "id": "music-directory",
+      "type": "text",
+      "name": "Music directory",
+      "description": "Where you have your music folders and files",
+      "default_value": "~/Music"
+    },
+    {
+      "id": "mpv-config",
+      "type": "text",
+      "name": "Mpv config socket",
+      "description": "Path to your mpv unix socket",
+      "default_value": "~/.config/mpv/socket"
     }
   ]
 }
