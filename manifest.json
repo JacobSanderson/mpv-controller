@@ -1,0 +1,18 @@
+{
+  "required_api_version": "^2.0.0",
+  "name": "MPV controller",
+  "description": "Control MPV playlists",
+  "developer_name": "Viktor",
+  "icon": "images/icon.png",
+  "options": {
+    "query_debounce": 0.05
+  },
+  "preferences": [
+    {
+      "id": "mpv-controler",
+      "type": "keyword",
+      "name": "mpv-controller",
+      "default_value": "mpv"
+    }
+  ]
+}
