@@ -14,7 +14,7 @@ import time
 import shutil
 
 logger = logging.getLogger(__name__)
-WIDTH = 42
+MAX_ENTRIES = 8
 
 CMDS = {
         "TRACK" : {
@@ -175,7 +175,7 @@ def getplaylists(music_dir:str, query:str):
     dirs = os.listdir(music_dir)
     dirs = search2(query, dirs)
     items = []
-    for name in dirs:
+    for name in dirs[:MAX_ENTRIES]:
         path = os.path.join(music_dir, name)
         if not os.path.isdir(path):
             continue
@@ -206,7 +206,7 @@ def get_current_options(socket_path:str, music_dir:str, query:str):
     else:
         cmds = search2(query, cmds)
     items = []
-    for key in cmds:
+    for key in cmds[:MAX_ENTRIES]:
         val = CMDS[key]
         # Format descriptions
         try:
