@@ -1,10 +1,14 @@
 import logging
+import gi
+gi.require_version('GLib', '2.0')
+from gi.repository import GLib
 from ulauncher.api.client.Extension import Extension
 from ulauncher.api.client.EventListener import EventListener
 from ulauncher.api.shared.event import KeywordQueryEvent, ItemEnterEvent
 from ulauncher.api.shared.item.ExtensionResultItem import ExtensionResultItem
 from ulauncher.api.shared.action.RenderResultListAction import RenderResultListAction
 from ulauncher.api.shared.action.ExtensionCustomAction import ExtensionCustomAction
+from ulauncher.api.shared.action.SetUserQueryAction import SetUserQueryAction
 import threading
 import subprocess
 import tempfile
@@ -154,10 +158,11 @@ def get_fmt(socket_path:str, fmt:str):
 def search2(needle:str|None, haystack:list[str]):
     if needle == "" or needle == None:
         return haystack
-    if shutil.which("fzf") == None:
-        return haystack
-    args = "\n".join(haystack)
     cmd = ["fzf", "-f", needle]
+    if shutil.which("fzf") == None:
+        cmd = ["grep", "-iF", needle]
+        #  return haystack
+    args = "\n".join(haystack)
     with tempfile.TemporaryFile() as stin:
         stin.write(args.encode())
         stin.seek(0)
@@ -203,6 +208,12 @@ def get_current_options(socket_path:str, music_dir:str, query:str):
     cmds = list(CMDS.keys())
     if getpid("mpv") == -1:
         cmds = ["Search"]
+    logger.info(f"Current query: {query}")
+    if query == None:
+        pass
+    elif query.startswith("search"):
+        nquery = query.removeprefix("search")
+        return getplaylists(music_dir, nquery)
     else:
         cmds = search2(query, cmds)
     items = []
@@ -222,14 +233,15 @@ def get_current_options(socket_path:str, music_dir:str, query:str):
             key = get_fmt(socket_path, "󰒭 {next-track}")
         elif key == "Previous":
             key = get_fmt(socket_path, "󰒮 {previous-track}")
+
+        action = ExtensionCustomAction(action, keep_app_open=depends)
+        if key == "Search":
+            action = SetUserQueryAction("m search ")
         # Fill stuff
         items.append(ExtensionResultItem(
             icon="images/icon.png",
-            name=key,
-            description=desc,
-            on_enter=ExtensionCustomAction(action, keep_app_open=depends),
-            on_alt_enter=ExtensionCustomAction(action, keep_app_open=depends),
-            ))
+            name=key, description=desc,
+            on_enter=action, on_alt_enter=action))
     return items
 
 #######################################
@@ -262,8 +274,9 @@ class IntemEnterEventListener(EventListener):
         else:
             t = threading.Thread(target=control_mpv, args=(socket_path, cmd), daemon=False)
             t.start()
-        time.sleep(0.1) #wait for socket to update from data change before
+        time.sleep(0.02) #wait for socket to update from data change before
         return RenderResultListAction(get_current_options(socket_path, music_dir, extension.last_query))
+
 
 # What happens on keyword search
 class KeywordQueryEventListener(EventListener):
