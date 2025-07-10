@@ -1,7 +1,5 @@
 import logging
 import gi
-gi.require_version('GLib', '2.0')
-from gi.repository import GLib
 from ulauncher.api.client.Extension import Extension
 from ulauncher.api.client.EventListener import EventListener
 from ulauncher.api.shared.event import KeywordQueryEvent, ItemEnterEvent
@@ -51,6 +49,11 @@ CMDS = {
             "action" : "playlist-shuffle",
             "should-close" : True
             },
+        "Find" : {
+            "description" : "Find track in current playlist",
+            "action" : "find",
+            "should-close" : False
+            },
         "Mute" : {
             "description" : "Un/mute current song (Mute: {mute})",
             "action" : "cycle mute",
@@ -83,7 +86,7 @@ CMDS = {
             }
         }
 
-def getpid(process:str = "mpv"):
+def get_pid(process:str = "mpv"):
     ROOT = "/proc"
     proc_dir = os.listdir(ROOT)
     for pid in proc_dir:
@@ -105,7 +108,7 @@ def get_data(socket_path:str, properties:list | str) -> dict:
     if isinstance(properties, str):
         properties = [properties]
     res = {}
-    if getpid("mpv") == -1:
+    if get_pid("mpv") == -1:
         return res
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(socket_path)
@@ -121,7 +124,7 @@ def get_data(socket_path:str, properties:list | str) -> dict:
                 res[pr] = None
     return res
 
-def get_name(socket_path:str, relative_pos:int):
+def get_name(socket_path:str, relative_pos:int) -> str:
     try:
         index = list(get_data(socket_path, "playlist-pos").values())[0]
         thing = list(get_data(socket_path, f"playlist/{index+relative_pos}/filename").values())[0]
@@ -133,7 +136,14 @@ def get_name(socket_path:str, relative_pos:int):
     name = os.path.splitext(name)[0]
     return name
 
-def get_fmt(socket_path:str, fmt:str):
+def get_current_playlist(socket_path:str) -> list[str]:
+    n = get_data(socket_path, "playlist/count")["playlist/count"]
+    filenames = get_data(socket_path, [f"playlist/{i}/filename" for i in range(n)])
+    names = [os.path.basename(name) for name in filenames.values()]
+    return names
+    
+
+def get_fmt(socket_path:str, fmt:str) -> str:
     options = ["volume", "playlist-pos", "playlist-count",
             "time-pos", "time-remaining", "percent-pos", "duration", 
             "media-title", "filename/no-ext", "working-directory",
@@ -155,7 +165,7 @@ def get_fmt(socket_path:str, fmt:str):
         logger.error(e)
     return fmt
 
-def search2(needle:str|None, haystack:list[str]):
+def search2(needle:str|None, haystack:list[str]) -> list[str]:
     if needle == "" or needle == None:
         return haystack
     cmd = ["fzf", "-f", needle]
@@ -175,7 +185,8 @@ def search2(needle:str|None, haystack:list[str]):
             res = [line.decode()[:-1] for line in  stout.readlines()]
     return res
 
-def getplaylists(music_dir:str, query:str):
+
+def get_playlists(music_dir:str, query:str) -> list[ExtensionResultItem]:
     music_dir = os.path.expanduser(music_dir)
     dirs = os.listdir(music_dir)
     dirs = search2(query, dirs)
@@ -196,24 +207,48 @@ def getplaylists(music_dir:str, query:str):
                     on_alt_enter=ExtensionCustomAction(action)) 
                 )
     return items
-    
-def control_mpv(socket_path:str, cmd:str):
+
+
+def get_tracks_in_queue(socket_path:str, query:str) -> list[ExtensionResultItem]:
+    playlist = get_current_playlist(socket_path)
+    songs = search2(query, playlist)
+    items = []
+    for name in songs[:MAX_ENTRIES]:
+        ntracks = len(playlist)
+        index = playlist.index(name)
+        desc = f"Position: {index+1}/{ntracks}"
+        action = f"set playlist-pos {index}"
+        items.append(
+                ExtensionResultItem(
+                    icon="images/icon.png",
+                    name=name,
+                    description=desc,
+                    on_enter=ExtensionCustomAction(action),
+                    on_alt_enter=ExtensionCustomAction(action)) 
+                )
+    return items   
+
+
+def control_mpv(socket_path:str, cmd:str) -> None:
     cmd = cmd + "\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(socket_path)
         client.send(cmd.encode())
-        return
 
-def get_current_options(socket_path:str, music_dir:str, query:str):
+
+def get_current_options(socket_path:str, music_dir:str, query:str) -> list[ExtensionResultItem]:
     cmds = list(CMDS.keys())
-    if getpid("mpv") == -1:
+    if get_pid("mpv") == -1:
         cmds = ["Search"]
     logger.info(f"Current query: {query}")
     if query == None:
         pass
     elif query.startswith("search"):
         nquery = query.removeprefix("search")
-        return getplaylists(music_dir, nquery)
+        return get_playlists(music_dir, nquery)
+    elif query.startswith("find"):
+        nquery = query.removeprefix("find")
+        return get_tracks_in_queue(socket_path, nquery)
     else:
         cmds = search2(query, cmds)
     items = []
@@ -237,6 +272,8 @@ def get_current_options(socket_path:str, music_dir:str, query:str):
         action = ExtensionCustomAction(action, keep_app_open=depends)
         if key == "Search":
             action = SetUserQueryAction("m search ")
+        if key == "Find":
+            action = SetUserQueryAction("m find ")
         # Fill stuff
         items.append(ExtensionResultItem(
             icon="images/icon.png",
@@ -269,7 +306,7 @@ class IntemEnterEventListener(EventListener):
             t = threading.Thread(target=func, daemon=False)
             t.start()
         elif cmd == "search":
-            playlists = getplaylists(music_dir, "")
+            playlists = get_playlists(music_dir, "")
             return RenderResultListAction(playlists)
         else:
             t = threading.Thread(target=control_mpv, args=(socket_path, cmd), daemon=False)
