@@ -34,23 +34,28 @@ CMDS = {
             "action" : "playlist-prev",
             "should-close" : False
             },
-        "Search" : {
+        "Select" : {
             "description" : "Choose a dir to play in {working-directory}",
-            "action" : "search",
+            "action" : "select",
             "should-close" : False
             },
         "Play/Pause" : {
-            "description" : "Current Track: {current-track} (Idle: {idle})",
+            "description" : " Current Track: {current-track} (Idle: {idle})",
             "action" : "cycle pause",
             "should-close" : True
             },
         "Shuffle" : {
-            "description" : "󰒟 current playlist",
+            "description" : "󰒟 Current playlist",
             "action" : "playlist-shuffle",
             "should-close" : True
             },
+        "Loop" : {
+            "description" : "⥁ Infinite loop current track",
+            "action" : "cycle-values loop-file \"inf\" \"no\"",
+            "should-close" : True
+            },
         "Find" : {
-            "description" : "Find track in current playlist",
+            "description" : " Find track in current playlist",
             "action" : "find",
             "should-close" : False
             },
@@ -104,6 +109,7 @@ def get_pid(process:str = "mpv"):
             return int(pid)
     return -1
 
+
 def get_data(socket_path:str, properties:list | str) -> dict:
     if isinstance(properties, str):
         properties = [properties]
@@ -124,6 +130,7 @@ def get_data(socket_path:str, properties:list | str) -> dict:
                 res[pr] = None
     return res
 
+
 def get_name(socket_path:str, relative_pos:int) -> str:
     try:
         index = list(get_data(socket_path, "playlist-pos").values())[0]
@@ -136,6 +143,7 @@ def get_name(socket_path:str, relative_pos:int) -> str:
     name = os.path.splitext(name)[0]
     return name
 
+
 def get_current_playlist(socket_path:str) -> list[str]:
     n = get_data(socket_path, "playlist/count")["playlist/count"]
     filenames = get_data(socket_path, [f"playlist/{i}/filename" for i in range(n)])
@@ -143,13 +151,15 @@ def get_current_playlist(socket_path:str) -> list[str]:
     return names
     
 
-def get_fmt(socket_path:str, fmt:str) -> str:
+def get_fmt(socket_path:str, fmt:str, music_dir:str=".") -> str:
     options = ["volume", "playlist-pos", "playlist-count",
             "time-pos", "time-remaining", "percent-pos", "duration", 
             "media-title", "filename/no-ext", "working-directory",
             "audio-speed-correction", "path", "idle", "mute"]
+    subs = {}
     try:
         subs = get_data(socket_path, options)
+        subs["working-directory"] = music_dir
         subs["current-track"] = get_name(socket_path, 0)
         subs["next-track"] = get_name(socket_path, 1)
         subs["previous-track"] = get_name(socket_path, -1)
@@ -160,10 +170,12 @@ def get_fmt(socket_path:str, fmt:str) -> str:
         subs["duration-sec"]  = int(subs["duration"])%60
         subs["duration-min"]  = int(subs["duration"])//60
         subs["duration-hour"] = int(subs["duration"])//60//60
-        fmt  = fmt.format(**subs)
-    except Exception as e:
+    except KeyError as e:
         logger.error(e)
+    subs["working-directory"] = music_dir
+    fmt  = fmt.format(**subs)
     return fmt
+
 
 def search2(needle:str|None, haystack:list[str]) -> list[str]:
     if needle == "" or needle == None:
@@ -191,13 +203,28 @@ def get_playlists(music_dir:str, query:str) -> list[ExtensionResultItem]:
     dirs = os.listdir(music_dir)
     dirs = search2(query, dirs)
     items = []
-    for name in dirs[:MAX_ENTRIES]:
-        path = os.path.join(music_dir, name)
-        if not os.path.isdir(path):
+    for entry in dirs[:MAX_ENTRIES]:
+        path = os.path.join(music_dir, entry)
+        if path.endswith(".playlist"):
+            name = entry.removesuffix(".playlist")
+            ntracks = len(open(path, "r").readlines())
+            action = f"mpv-play --playlist={path}"
+            desc = f"{ntracks} tracks."
+        elif os.path.isdir(path):
+            name = entry
+            ntracks = len(os.listdir(path))
+            action = f"mpv-play {path}"
+            desc = f"{ntracks} tracks."
+        elif os.path.isfile(path):
+            name = entry
+            ntracks = 1
+            ext = entry[entry.rfind("."):]
+            desc = f"File of extension: {ext}"
+            action = f"mpv-play {path}"
+        else:
             continue
-        ntracks = len(os.listdir(path))
-        desc = f"{ntracks} tracks."
-        action = "mpv-play " + path
+        if ntracks <= 0:
+            continue
         items.append(
                 ExtensionResultItem(
                     icon="images/icon.png",
@@ -239,26 +266,22 @@ def control_mpv(socket_path:str, cmd:str) -> None:
 def get_current_options(socket_path:str, music_dir:str, query:str) -> list[ExtensionResultItem]:
     cmds = list(CMDS.keys())
     if get_pid("mpv") == -1:
-        cmds = ["Search"]
+        cmds = ["Select"]
     logger.info(f"Current query: {query}")
     if query == None:
         pass
-    elif query.startswith("search"):
-        nquery = query.removeprefix("search")
+    elif query.startswith("select"):
+        nquery = query.removeprefix("select")
         return get_playlists(music_dir, nquery)
     elif query.startswith("find"):
         nquery = query.removeprefix("find")
         return get_tracks_in_queue(socket_path, nquery)
     else:
         cmds = search2(query, cmds)
-    items = []
+    options = []
     for key in cmds[:MAX_ENTRIES]:
         val = CMDS[key]
-        # Format descriptions
-        try:
-            desc = get_fmt(socket_path, val["description"]) 
-        except KeyError:
-            desc = val["description"]
+        desc = get_fmt(socket_path, val["description"], music_dir) 
         action = val["action"]
         depends = not val["should-close"]
         # Format keys
@@ -270,16 +293,16 @@ def get_current_options(socket_path:str, music_dir:str, query:str) -> list[Exten
             key = get_fmt(socket_path, "󰒮 {previous-track}")
 
         action = ExtensionCustomAction(action, keep_app_open=depends)
-        if key == "Search":
-            action = SetUserQueryAction("m search ")
+        if key == "Select":
+            action = SetUserQueryAction("m select ")
         if key == "Find":
             action = SetUserQueryAction("m find ")
         # Fill stuff
-        items.append(ExtensionResultItem(
+        options.append(ExtensionResultItem(
             icon="images/icon.png",
             name=key, description=desc,
             on_enter=action, on_alt_enter=action))
-    return items
+    return options
 
 #######################################
 # Main Extension Classes
@@ -305,17 +328,18 @@ class IntemEnterEventListener(EventListener):
             func = lambda: subprocess.run(["mpv", "--no-audio-display", playlist])
             t = threading.Thread(target=func, daemon=False)
             t.start()
-        elif cmd == "search":
+        elif cmd == "select":
             playlists = get_playlists(music_dir, "")
             return RenderResultListAction(playlists)
         else:
             t = threading.Thread(target=control_mpv, args=(socket_path, cmd), daemon=False)
             t.start()
-        time.sleep(0.02) #wait for socket to update from data change before
-        return RenderResultListAction(get_current_options(socket_path, music_dir, extension.last_query))
+        time.sleep(0.01) #wait for socket to update from data change before
+        options = get_current_options(socket_path, music_dir, extension.last_query)
+        return RenderResultListAction(options)
 
 
-# What happens on keyword search
+# What happens on keyword select
 class KeywordQueryEventListener(EventListener):
     def on_event(self, event, extension):
         socket_path = extension.preferences["mpv-config"]
@@ -325,8 +349,8 @@ class KeywordQueryEventListener(EventListener):
         kw = event.get_keyword()
         query = event.get_argument()
         extension.last_query = query
-        items = get_current_options(socket_path, music_dir, query)
-        return RenderResultListAction(items)
+        options = get_current_options(socket_path, music_dir, query)
+        return RenderResultListAction(options)
 
 if __name__ == "__main__":
     DemoExtension().run()
